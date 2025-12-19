@@ -9,7 +9,6 @@ export default async function handler(request) {
     'Access-Control-Allow-Headers': 'Content-Type',
   };
 
-  // Handle CORS preflight
   if (request.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -18,17 +17,14 @@ export default async function handler(request) {
   const query = url.searchParams.get("q");
 
   if (!query) {
-    return new Response(JSON.stringify({ error: "Missing search query parameter ?q=" }), {
+    return new Response(JSON.stringify({ error: "Missing query parameter ?q=" }), {
       status: 400,
-      headers: { 
-        "Content-Type": "application/json",
-        ...corsHeaders 
-      }
+      headers: { "Content-Type": "application/json", ...corsHeaders }
     });
   }
 
   try {
-    // Note: Ensure the YouTube URL protocol is present
+    // Fixed the YouTube URL here
     const ytURL = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 
     const ytRes = await fetch(ytURL, {
@@ -47,95 +43,53 @@ export default async function handler(request) {
       results: videos,
       count: videos.length
     }), {
-      headers: {
-        "Content-Type": "application/json",
-        ...corsHeaders
-      }
+      headers: { "Content-Type": "application/json", ...corsHeaders }
     });
 
   } catch (error) {
-    return new Response(JSON.stringify({ 
-      error: "Failed to fetch or parse YouTube search results",
-      details: error.message 
-    }), {
+    return new Response(JSON.stringify({ error: error.message }), {
       status: 500,
-      headers: { 
-        "Content-Type": "application/json",
-        ...corsHeaders 
-      }
+      headers: { "Content-Type": "application/json", ...corsHeaders }
     });
   }
 }
 
 function extractVideos(html) {
   let jsonText = null;
-
   const scripts = html.match(/<script[^>]*>.*?ytInitialData.*?<\/script>/gs);
   if (scripts) {
     for (const s of scripts) {
       const m = s.match(/ytInitialData\s*=\s*(\{.*?\});/s);
-      if (m) {
-        jsonText = m[1];
-        break;
-      }
+      if (m) { jsonText = m[1]; break; }
     }
   }
-
   if (!jsonText) {
     const fallbackMatch = html.match(/var ytInitialData\s*=\s*(\{.*?\});<\/script>/s);
-    if (fallbackMatch) {
-      jsonText = fallbackMatch[1];
-    }
+    if (fallbackMatch) jsonText = fallbackMatch[1];
   }
 
   if (!jsonText) return [];
 
-  let data;
-  try { 
-    data = JSON.parse(jsonText); 
-  } catch (e) { 
-    return []; 
-  }
-
-  const results = [];
-
   try {
+    const data = JSON.parse(jsonText);
+    const results = [];
     const contents = data.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents?.[0]?.itemSectionRenderer?.contents || [];
-    
+
     for (let item of contents) {
       const vid = item.videoRenderer;
       if (!vid) continue;
 
-      const thumbnails = vid.thumbnail?.thumbnails || [];
-      const bestThumbnail = thumbnails[thumbnails.length - 1] || thumbnails[0];
-      
-      const durationText = vid.lengthText?.simpleText || 
-                           vid.thumbnailOverlays?.[0]?.thumbnailOverlayTimeStatusRenderer?.text?.simpleText || 
-                           "";
-
-      const channelId = vid.ownerText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || 
-                        vid.longBylineText?.runs?.[0]?.navigationEndpoint?.browseEndpoint?.browseId || 
-                        "";
-
       results.push({
         videoId: vid.videoId,
-        title: vid.title?.runs?.[0]?.text || vid.title?.simpleText || "",
-        channel: vid.ownerText?.runs?.[0]?.text || 
-                 vid.longBylineText?.runs?.[0]?.text || 
-                 vid.shortBylineText?.runs?.[0]?.text || "",
-        channelId: channelId,
+        title: vid.title?.runs?.[0]?.text || "",
+        channel: vid.ownerText?.runs?.[0]?.text || "",
+        duration: vid.lengthText?.simpleText || "",
         views: vid.viewCountText?.simpleText || "",
-        published: vid.publishedTimeText?.simpleText || "",
-        duration: durationText,
-        thumbnail: bestThumbnail?.url || "",
-        thumbnails: thumbnails,
-        isLive: vid.thumbnailOverlays?.[1]?.thumbnailOverlayTimeStatusRenderer?.style === "LIVE",
-        description: vid.descriptionSnippet?.runs?.map(run => run.text).join('') || ""
+        thumbnail: vid.thumbnail?.thumbnails?.pop()?.url || ""
       });
     }
-  } catch (error) {
-    console.error('Error parsing video data:', error);
+    return results;
+  } catch (e) {
+    return [];
   }
-
-  return results;
 }
